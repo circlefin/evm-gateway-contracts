@@ -75,7 +75,7 @@ jobs:
         run: yarn test:all
 
   rollup_results:
-    runs-on: small
+    runs-on: ubuntu-latest
     name: Build Success Rollup
     if: ${{ always() }}
     needs:
