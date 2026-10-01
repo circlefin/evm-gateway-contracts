@@ -46,6 +46,8 @@ contract Deposits is Pausing, Denylist, TokenSupport, Balances {
 
     /// Thrown for attempted zero-value deposits
     error DepositValueMustBePositive();
+    /// @notice The token moved a different amount than requested (fee-on-transfer behaviour).
+    error UnsupportedTokenTransferFee();
 
     /// Thrown when attempting to deposit for a blacklisted address
     ///
@@ -204,19 +206,29 @@ contract Deposits is Pausing, Denylist, TokenSupport, Balances {
     /// @param sender      The address that the funds should be deposited from
     /// @param value       The amount to be deposited
     function _depositWithApproval(address token, address depositor, address sender, uint256 value) internal {
-        // Ensure that the value is non-zero
         if (value == 0) {
             revert DepositValueMustBePositive();
         }
 
-        // Increase the depositor's available balance
-        _increaseAvailableBalance(token, depositor, value);
-
-        // Transfer the tokens from the sender to this contract
+        // Checks-Effects-Interactions: transfer first, then credit the amount actually received.
+        // This path previously credited `value` BEFORE the `safeTransferFrom`, and never verified
+        // how much arrived. For a token that charges a transfer fee, the depositor was credited
+        // the nominal amount while the contract received less, socialising the shortfall onto
+        // other depositors at `withdraw`. Crediting after transfer also guarantees that a callback-
+        // capable token cannot reenter and observe an already-inflated balance.
+        uint256 balanceBefore = IERC20(token).balanceOf(address(this));
         IERC20(token).safeTransferFrom(sender, address(this), value);
+        uint256 received = IERC20(token).balanceOf(address(this)) - balanceBefore;
+
+        if (received != value) {
+            revert UnsupportedTokenTransferFee();
+        }
+
+        // Increase the depositor's available balance
+        _increaseAvailableBalance(token, depositor, received);
 
         // Emit an event to signal the deposit
-        emit Deposited(token, depositor, sender, value);
+        emit Deposited(token, depositor, sender, received);
     }
 
     /// Internal implementation for depositing tokens using an EIP-2612 permit
@@ -229,21 +241,29 @@ contract Deposits is Pausing, Denylist, TokenSupport, Balances {
     function _depositWithPermit(address token, address owner, uint256 value, uint256 deadline, bytes memory signature)
         internal
     {
-        // Ensure that the value is non-zero
         if (value == 0) {
             revert DepositValueMustBePositive();
         }
 
-        // Increase the depositor's available balance
         address depositor = owner;
-        _increaseAvailableBalance(token, depositor, value);
 
-        // Execute the permit and transfer the tokens from the depositor to this contract
+        // Execute the permit to approve this contract
         IERC7597(token).permit(depositor, address(this), value, deadline, signature);
+
+        // Checks-Effects-Interactions: transfer first, verify received amount matches, then credit.
+        uint256 balanceBefore = IERC20(token).balanceOf(address(this));
         IERC20(token).safeTransferFrom(depositor, address(this), value);
+        uint256 received = IERC20(token).balanceOf(address(this)) - balanceBefore;
+
+        if (received != value) {
+            revert UnsupportedTokenTransferFee();
+        }
+
+        // Increase the depositor's available balance
+        _increaseAvailableBalance(token, depositor, received);
 
         // Emit an event to signal the deposit
-        emit Deposited(token, owner, owner, value);
+        emit Deposited(token, owner, owner, received);
     }
 
     /// @dev Internal implementation for depositing tokens using an ERC-7598 authorization
@@ -264,21 +284,30 @@ contract Deposits is Pausing, Denylist, TokenSupport, Balances {
         bytes32 nonce,
         bytes memory signature
     ) internal {
-        // Ensure that the value is non-zero
         if (value == 0) {
             revert DepositValueMustBePositive();
         }
 
-        // Increase the depositor's available balance
         address depositor = from;
-        _increaseAvailableBalance(token, depositor, value);
 
-        // Execute the authorization to transfer the tokens from the depositor to this contract
+        // Sample balance BEFORE the authorization transfer executes to measure the real delta accurately.
+        uint256 balanceBefore = IERC20(token).balanceOf(address(this));
+
+        // Execute the authorization to transfer the tokens from the depositor to this contract.
         IERC7598(token).receiveWithAuthorization(
             depositor, address(this), value, validAfter, validBefore, nonce, signature
         );
 
+        uint256 received = IERC20(token).balanceOf(address(this)) - balanceBefore;
+
+        if (received != value) {
+            revert UnsupportedTokenTransferFee();
+        }
+
+        // Increase the depositor's available balance
+        _increaseAvailableBalance(token, depositor, received);
+
         // Emit an event to signal the deposit
-        emit Deposited(token, depositor, depositor, value);
+        emit Deposited(token, depositor, depositor, received);
     }
 }
