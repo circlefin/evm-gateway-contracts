@@ -48,7 +48,7 @@ for (const chain of [ethereum, base, avalanche]) {
     await chain.client.waitForTransactionReceipt({ hash: depositTx });
     console.log("Done! Transaction hash:", depositTx);
   } catch (error) {
-    if (error.details.includes("insufficient funds")) {
+    if (error.details?.includes("insufficient funds")) {
       // If there wasn't enough for gas, log an error message and exit
       console.error(`The wallet does not have enough ${chain.currency} to pay for gas on ${chain.name}!`);
       console.error(`Please top up using a faucet.`);
