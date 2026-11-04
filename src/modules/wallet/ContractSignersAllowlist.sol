@@ -28,8 +28,10 @@ enum ContractSignerAllowlistStatus {
     Unallowlisted,
     /// The contract signer is allowlisted
     Allowlisted,
-    /// The contract signer was previously allowlisted, but the allowlist has been revoked. This state is distinct from
-    /// `Unallowlisted` to handle specific scenarios like signed burn intents.
+    /// The contract signer was previously allowlisted, but the allowlist has been revoked. Revoked signers can still
+    /// authorize burn intents via their own EIP-1271 signatures, because burn validation accepts any signer that has
+    /// ever been allowlisted (see `_wasEverAllowlistedContractSigner`). This state is distinct from `Unallowlisted` so
+    /// that off-chain consumers can distinguish revoked signers from never-allowlisted ones.
     Revoked
 }
 
@@ -44,7 +46,10 @@ contract ContractSignersAllowlist is Initializable, Ownable2StepUpgradeable {
 
     /// Emitted when a contract is removed from the signers allowlist
     ///
-    /// @param contractAddr   The contract address that is no longer allowed to use EIP-1271 signing
+    /// @dev Revocation is not enforced on-chain: the contract can still authorize burn intents via its own
+    ///      EIP-1271 signature (see `_wasEverAllowlistedContractSigner`).
+    ///
+    /// @param contractAddr   The contract address that has been revoked
     event ContractSignerDisallowed(address indexed contractAddr);
 
     /// Emitted when the contract signers allowlister address is updated
@@ -145,6 +150,11 @@ contract ContractSignersAllowlist is Initializable, Ownable2StepUpgradeable {
     ///
     /// @dev May only be called by the `contractSignersDisallowlister` role
     ///
+    /// @dev Revocation does not prevent the contract from authorizing **new** burn intents via its own ERC-1271
+    ///      signature, nor does it invalidate intents signed before the revocation. The `Revoked` status is kept
+    ///      (rather than resetting to `Unallowlisted`) so that off-chain consumers can distinguish revoked
+    ///      signers from never-allowlisted ones; see `_wasEverAllowlistedContractSigner`.
+    ///
     /// @param contractAddr   The contract address to be removed from the allowlist
     function disallowContractSigner(address contractAddr) external onlyContractSignersDisallowlister {
         if (!_wasEverAllowlistedContractSigner(contractAddr)) {
@@ -213,7 +223,7 @@ contract ContractSignersAllowlist is Initializable, Ownable2StepUpgradeable {
     /// @param contractAddr   The contract address to check
     /// @return               `true` if the address has ever been allowlisted, `false` otherwise
     function _wasEverAllowlistedContractSigner(address contractAddr) internal view returns (bool) {
-        // Check that the stored allowlist status is either `Allowlisted` or `RevokedAllowlist`
+        // Check that the stored allowlist status is either `Allowlisted` or `Revoked`
         ContractSignerAllowlistStatus status = ContractSignersAllowlistStorage.get().allowlistMapping[contractAddr];
         return status != ContractSignerAllowlistStatus.Unallowlisted;
     }
